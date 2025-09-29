@@ -1,0 +1,483 @@
+#### extracting only Figure 4A from the last version ----------------------------------------------------------------------------------------------------------------------------
+library(dplyr)
+library(rstatix)
+library(tibble)
+library(limma)
+library(fgsea)
+library(ggpubr)
+library(ggrepel)
+library(VennDiagram)
+library(circlize)
+library(ComplexHeatmap)
+library(ggplotify)
+library(dplyr)
+library(gridExtra)
+library(cowplot)
+
+#setwd("D:/OneDrive/OneDrive - TUNI.fi/ISE/Proteomics + Metabolomics/Lipidomics")
+setwd("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/Proteomics+Metabolomics_CEC3_blood/Lipidomics/new_analysis_92025")
+#create theme for all plots
+#create theme for all plots
+mytheme <- theme_classic(base_family='sans') + theme(axis.text.x = element_text(size=6, color = "black"),
+                                                     axis.text.y= element_text(size=6, color = "black"),
+                                                     axis.title.y = element_text(size=8, color = "black"),
+                                                     axis.title.x = element_text(size=8, color = "black"),
+                                                     legend.text = element_text( size = 4, color = "black"),
+                                                     legend.key.size = unit(2, 'mm'),
+                                                     legend.position = "top",
+                                                     legend.title = element_blank(),
+                                                     plot.title = element_text(hjust = 0.5, size = 8,face = "bold"),
+                                                     axis.line = element_line(colour = "black", linewidth=1/.pt),
+                                                     strip.text.x = element_text(size = 6),
+                                                     panel.background = element_rect(fill = 'White'),
+                                                     panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                                                     axis.title.x.top = element_text(color='#4daf4a',size=7), 
+                                                     axis.text.x.top = element_text(color='#4daf4a',size=6))
+
+palette <- c(GFDd = "#00b347", GFDp = "#005923",PGCd = "#6500ff", PGCp = "#ff6500")
+stcat_lipids_palette <- c(FA = "#ae3c60", 
+                          GP = "#df473c",
+                          ST = "#f3c33c",
+                          SP = "#255e79",
+                          GL = "#267778",
+                          PR = "#82b4bb")
+#Open data
+lipids <- readxl::read_xlsx("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/Proteomics+Metabolomics_CEC3_blood/Lipidomics/lipids_characteristics.xlsx")
+DE_results <- readRDS("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/Proteomics+Metabolomics_CEC3_blood/Lipidomics/DE_lipids_results.rds")
+
+
+#FGSEA sets enrichment
+sets <- list()
+for(i in unique(lipids$structural_category)){
+  tmp <- lipids[lipids$structural_category == i, c("name", "class")]
+  sets[[i]] <- tmp$name
+}
+for(i in unique(lipids$class)){
+  tmp <- lipids[lipids$class == i, c("name", "class")]
+  sets[[i]] <- tmp$name
+}
+for(i in unique(na.omit(lipids$totallength))){
+  tmp <- na.omit(lipids[lipids$totallength == i, c("name", "class")])
+  set <- paste0("total_length_",i)
+  sets[[set]] <- tmp$name
+}
+for(i in unique(na.omit(lipids$totaldb))){
+  tmp <- na.omit(lipids[lipids$totaldb == i, c("name", "class")])
+  set <- paste0("total_db_",i)
+  sets[[set]] <- tmp$name
+}
+lipids$length_db <- paste(lipids$totallength, lipids$totaldb, sep ="_")
+for(i in unique(na.omit(lipids$length_db))){
+  tmp <- na.omit(lipids[lipids$length_db == i, c("name", "class")])
+  set <- paste0("length_db_",i)
+  sets[[set]] <- tmp$name
+}
+
+sets_cat <- data.frame(category = c(rep("class",length(unique(lipids$class))), rep("structural_category",length(unique(lipids$structural_category))), 
+                                rep("totallength",length(unique(lipids$totallength))), rep("totaldb",length(unique(lipids$totaldb))),
+                                rep("length_db", length(unique(lipids$length_db)))),
+                   set = c(unique(lipids$class), unique(lipids$structural_category), paste0("total_length_",unique(lipids$totallength)), 
+                           paste0("total_db_",unique(lipids$totaldb)), paste0("length_db_",unique(lipids$length_db))))  
+
+for (i in c("PGCd - GFDd","PGCp - GFDp","PGCd - PGCp")){
+  tmp <- DE_results[[i]]
+  named_list <- tmp$logFC
+names(named_list) <- tmp$name
+
+fgseaRes <- fgsea(sets, named_list, minSize=2)
+fgseaRes <- fgseaRes %>% arrange(padj) %>% rename(set = pathway) %>% left_join(sets_cat, join_by(set))
+set <- paste0("fgsea_",i)
+DE_results[[set]] <- fgseaRes
+}
+
+#----------------------------------------------------------------------------boxplots of enriched classes------------------------------------------------------------
+
+j = "PGCd - GFDd"
+
+DEL <- DE_results[[j]]
+EN <- DE_results[[paste0("fgsea_",j)]]
+EN <- EN %>% mutate(Enrichment = if_else(padj <0.05, "Significant", "Non Significant"))
+Category  = "structural_category"
+
+df <- DEL %>% select(sym(Category), logFC) 
+
+colnames(df)[1] <- "set"
+
+df <- df %>% right_join(EN[EN$category == Category, c("set", "Enrichment")], join_by(set))
+df$set <- factor(df$set, levels= c("GP", "SP", "GL", "ST", "FA"))
+
+bp1 <- ggboxplot(df, "set", "logFC", add = "jitter", color = "Enrichment", size = 0.1, add.params = list(size = 0.1)) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour="#858585", size=0.1) + 
+  ylab(paste0("log2FC (",j, ")"))+
+  mytheme + theme(axis.title.x = element_blank())
+
+j = "PGCp - GFDp"
+
+DEL <- DE_results[[j]]
+EN <- DE_results[[paste0("fgsea_",j)]]
+EN <- EN %>% mutate(Enrichment = if_else(padj <0.05, "Significant", "Non Significant"))
+Category  = "structural_category"
+
+df <- DEL %>% select(sym(Category), logFC) 
+
+colnames(df)[1] <- "set"
+
+df <- df %>% right_join(EN[EN$category == Category, c("set", "Enrichment")], join_by(set))
+df$set <- factor(df$set, levels= c("GP", "SP", "GL", "ST", "FA"))
+
+bp2 <- ggboxplot(df, "set", "logFC", add = "jitter", color = "Enrichment", size = 0.1, add.params = list(size = 0.1))+
+  geom_hline(yintercept = 0, linetype = "dashed", colour="#858585", size=0.1) + 
+  ylab(paste0("log2FC (",j, ")"))+
+  mytheme + theme(axis.title.x = element_blank())
+
+
+j = "PGCd - PGCp"
+
+DEL <- DE_results[[j]]
+EN <- DE_results[[paste0("fgsea_",j)]]
+EN <- EN %>% mutate(Enrichment = if_else(padj <0.05, "Significant", "Non Significant"))
+Category  = "structural_category"
+
+df <- DEL %>% select(sym(Category), logFC) 
+
+colnames(df)[1] <- "set"
+
+df <- df %>% right_join(EN[EN$category == Category, c("set", "Enrichment")], join_by(set))
+df$set <- factor(df$set, levels= c("GP", "SP", "GL", "ST", "FA"))
+
+bp3 <- ggboxplot(df, "set", "logFC", add = "jitter", color = "Enrichment", size = 0.1, add.params = list(size = 0.1))+
+  geom_hline(yintercept = 0, linetype = "dashed", colour="#858585", size=0.1) + 
+  ylab(paste0("log2FC (",j, ")"))+
+  mytheme + theme(axis.title.x = element_blank())
+
+A <- ggarrange(bp1,bp2,bp3,
+               ncol = 3, common.legend = T, align = "v")
+
+
+A
+ggexport(A, filename = "box_plot_A.tiff", height = 700, width = 1500, res = 300)
+
+##### making the data again for figure 4 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Loading package
+
+library(readxl)
+library(dplyr)
+library(numform)
+library(ggpubr)
+library(caTools)
+library(randomForest)
+library(readxl)
+library(stringr)
+library(caret)
+library(gridExtra)
+library(cowplot)
+
+mytheme <- theme_classic(base_family='sans') + theme(axis.text.x = element_text(size=6, color = "black"),
+                                                     axis.text.y= element_text(size=6, color = "black"),
+                                                     axis.title.y = element_text(size=8, color = "black"),
+                                                     axis.title.x = element_text(size=8, color = "black"),
+                                                     legend.text = element_text( size = 4, color = "black"),
+                                                     legend.key.size = unit(2, 'mm'),
+                                                     legend.position = "top",
+                                                     legend.title = element_blank(),
+                                                     plot.title = element_text(hjust = 0.5, size = 8,face = "bold"),
+                                                     axis.line = element_line(colour = "black", linewidth=1/.pt),
+                                                     strip.text.x = element_text(size = 6),
+                                                     strip.text.y = element_text(size = 6),
+                                                     panel.background = element_rect(fill = 'White'),
+                                                     panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                                                     axis.title.x.top = element_text(color='#4daf4a',size=7), 
+                                                     axis.text.x.top = element_text(color='#4daf4a',size=6))
+palette <- c(GFDd = "#00b347", GFDp = "#005923",PGCd = "#6500ff", PGCp = "#ff6500")
+
+
+
+labtest <- read_xlsx(path = "C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/Proteomics+Metabolomics_CEC3_blood/Lipidomics/Labtest.xlsx")
+meta <- readxl::read_xlsx("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/Proteomics+Metabolomics_CEC3_blood/Lipidomics/proteome metadata.xlsx")
+
+lipids <- readxl::read_xlsx("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/Proteomics+Metabolomics_CEC3_blood/Lipidomics/lipids_characteristics.xlsx")
+raw_data <- readxl::read_xlsx("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/Proteomics+Metabolomics_CEC3_blood/Lipidomics/Lipidomics_raw_data.xlsx")
+#----------------------------------------------------------------------------selected lab-tests PLACEBO-------------------------------------------------------------------------
+labtest <- readxl::read_xlsx("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/Proteomics+Metabolomics_CEC3_blood/Lipidomics/labtest.xlsx")
+labtest_melt <- reshape2::melt(labtest, id = c("newID","Timepoint"))
+labtest_melt <- merge(labtest_melt, meta, by = c("newID","Timepoint"))
+labtest_melt$label2 <- factor(labtest_melt$label2, levels = c("GFDd","PGCd","GFDp","PGCp"))
+
+tests <- c("GFR_mL_min","CREA_mg_dL", "UREA_mg_dL", "VITB12_pg_mL", "GGT_U_L", "LIPASET_U_L", "ALT_U_L", "AST_U_L", "AST:ALT", "CRP_mg_L")
+my_comparisons5 <- list( c("GFDd", "PGCd"), c("GFDp", "PGCp"), c("PGCp", "PGCd"))
+
+stat_comp <- data.frame()
+for(j in tests){
+#for(j in unique(labtest_melt$variable)){
+for(i in 1:length(my_comparisons5)){
+  group1 <- my_comparisons5[[i]][1]
+  group2 <- my_comparisons5[[i]][2]
+  a <- as.numeric(labtest_melt[labtest_melt$label2==my_comparisons5[[i]][1] & labtest_melt$variable == j,]$value)
+  b <- as.numeric(labtest_melt[labtest_melt$label2==my_comparisons5[[i]][2] & labtest_melt$variable == j,]$value)
+ 
+  
+  if (length(a)==length(b)){
+    test <- t.test(a, b, paired=T)
+    
+    
+  } else{
+    test <- t.test(a, b, paired=F)
+  }
+  p.value <- test$p.value
+  est <- test$estimate[1]
+  est_CI <- paste(round(test$conf.int[1],2), "to", 
+                  round(test$conf.int[2],2), sep=" ")
+  mean1 <- mean(a, na.rm = T)
+  sd1 <- sd(a, na.rm = T)
+  
+  mean2 <- mean(b, na.rm = T)
+  sd2 <- sd(b, na.rm = T)
+  tmp <- labtest_melt[labtest_melt$label2 %in% c(my_comparisons5[[i]][1],my_comparisons5[[i]][2]) & labtest_melt$variable == j,]
+  tmp$value <- as.numeric(tmp$value)
+  y.position <- rstatix::get_y_position(tmp,
+                                        value ~ label2,   fun = "max")$y.position*1.05
+  
+  tmp2 <- cbind(variable = j, group1,group2,N1 = length(a),mean1,sd1,N2 = length(b),mean2,sd2,p.value, est, est_CI,  y.position)
+  stat_comp <- rbind(stat_comp,tmp2)
+  
+}
+  
+}
+stat_comp <- stat_comp %>% filter(p.value < 0.05)
+stat_comp[order(stat_comp$p.value),]
+
+stat_comp %>% 
+  mutate(p_new = ifelse(`p.value` > 0.01, c(paste("italic('P')~`=", f_num(`p.value`,2), "`")), `p.value`))%>% 
+  mutate(p_new = ifelse(`p.value` < 0.01, c(paste("italic('P')~`=", f_num(`p.value`,3), "`")), p_new)) %>%
+  mutate(p_new = ifelse(`p.value` < 0.001, c(paste("italic('P')~`", "<.001", "`")),p_new)) %>%
+  mutate_at("y.position", as.numeric)->stat_comp
+
+
+labtest_melt <- labtest_melt %>% mutate_at("value", as.numeric)
+B1 <- ggboxplot(labtest_melt %>% filter(variable=="CREA_mg_dL"), x = "label2", y = "value", color = "label2", 
+                palette = palette, add = "jitter", ylab = "Creatinine, mg/dL",  size = 0.1, add.params = list(size = 0.1))+
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 0.51, ymax = 0.95, 
+           alpha = 0.2,fill = "#ccffd4")+
+#geom_signif(data=stat_comp %>% filter(variable=="CREA_mg_dL"), 
+ #           aes(xmin=group1, xmax=group2, annotations=p_new, y_position=y.position),
+#            textsize = 6/.pt, 
+ #           manual=TRUE, parse=T, size=0.3)+
+  mytheme + theme(axis.title.x = element_blank()) 
+
+B2 <- ggboxplot(labtest_melt %>% filter(variable=="GFR_mL_min"), x = "label2", y = "value", color = "label2", 
+                palette = palette, add = "jitter", ylab = "Glomerular Filtration Rate, mL/min", size = 0.1, add.params = list(size = 0.1))+
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 60, ymax = 150, 
+           alpha = 0.2,fill = "#ccffd4")+
+ # geom_signif(data=stat_comp %>% filter(variable=="GFR_mL_min"), 
+  #            aes(xmin=group1, xmax=group2, annotations=p_new, y_position=y.position),
+  #            textsize = 6/.pt, 
+  #            manual=TRUE, parse=T, size=0.3)+
+  mytheme + theme(axis.title.x = element_blank())
+
+B <- ggarrange(B1,B2,nrow = 1, common.legend = T, align = "h")
+B
+ggexport(B,filename = "Figure 4A.tiff",
+         width = 1200, # 7 inch max width 2100
+         height = 600, 
+         res = 300) 
+#----------------------------------------------------------------------------carnitines-------------------------------------------------------------------------
+features <- lipids[lipids$class == "Car",]$feature
+
+
+melt <- reshape2::melt(raw_data)
+melt <- melt[melt$feature %in% features,]
+melt <- merge(melt, meta, by.x = "variable", by.y="Sample ID")
+total_Car <- melt %>% group_by(variable, label2) %>% summarise(total_conc = sum(value))
+total_Car$label2 <- factor(total_Car$label2, levels = c("GFDd","PGCd","GFDp","PGCp"))
+
+C <- ggboxplot(total_Car, x = "label2", y = "total_conc", color = "label2", palette = palette, add = "jitter", ylab = "Total carnitines detected, ug/mL",
+               size = 0.1, add.params = list(size = 0.1)
+               )+mytheme + theme(axis.title.x = element_blank())
+
+chain_Car <- merge(melt[,c("feature", "value","label2")], lipids[,c("feature","totallength")])
+chain_Car$totallength <- factor(chain_Car$totallength, levels = c(0,2,  4,    5,  6, 9, 10,14,16,   18 ))
+chain_Car$label2 <- factor(chain_Car$label2, levels = c("GFDd","PGCd","GFDp","PGCp"))
+
+C1 <- ggplot(chain_Car, aes(x = totallength, y = value)) + 
+  #geom_jitter(aes(color = label2), size = 0.1,position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8)) + 
+  ylab("Carnitines detected, ug/mL") + xlab("Carbon number in fatty acid") +
+  stat_summary(aes(color = label2), fun.data="mean_sdl", fun.args = list(mult=1), size = 0.1, position = position_dodge(0.8))+ scale_y_continuous(trans='log2')+
+  scale_color_manual(values =  palette)+ 
+  mytheme #+ theme(axis.title.x = element_blank())
+ggexport(C1,filename = "Figure 4B.tiff",
+         width = 2200, # 7 inch max width 2100
+         height = 1200, 
+         res = 300) # Figure panels should be prepared at a minimum resolution of 300 dpi and saved at a maximum width of 180 mm (7,08661 inch). 
+#----------------------------------------------------------------------------Corr with lab tests PLACEBO--------------------------------------------------------------------
+features <- c("X9_decenoylcarnitine_C10_1_Car","Nonanoylcarnitine")
+df <- melt %>% filter(feature %in% features) %>% select ("newID", "Timepoint","feature","value","label2") %>% 
+  left_join(labtest_melt %>% filter(variable %in% c("CREA_mg_dL","GFR_mL_min")) %>% select ("newID", "Timepoint","variable","value"),by=c("newID", "Timepoint"))
+
+# New facet label names for lipids variable
+lipid.labs <- c("X9_decenoylcarnitine_C10_1_Car", "Nonanoylcarnitine")
+names(lipid.labs) <- c("CAR 10:1", "CAR 9:0")
+
+# New facet label names for variable 
+test.labs <- c("CREA_mg_dL","GFR_mL_min")
+names(test.labs) <- c("Creatinine, \n mg/dL", "Glomerular Filtration \n Rate, mL/min")
+
+df$variable <- factor(df$variable, levels = c("GFR_mL_min", "CREA_mg_dL"), 
+                  labels = c("Glomerular Filtration \n Rate, mL/min","Creatinine, \n mg/dL"))
+df$feature <- factor(df$feature, levels = c("X9_decenoylcarnitine_C10_1_Car", "Nonanoylcarnitine"),
+                  labels = c("CAR 10:1", "CAR 9:0")
+)
+correlations <- data.frame()
+for(i in unique(df$feature)){
+  for(j in unique(df$variable)){
+    tmp <- df[df$feature == i & df$variable == j,]
+    cor.test.result <- cor.test(tmp$value.x, tmp$value.y, method = "pearson")
+    tmp2 <- data.frame(feature = i, variable = j, correlation_coefficient = cor.test.result$estimate, p.value = cor.test.result$p.value)
+    correlations <- rbind(correlations, tmp2)
+  }
+}
+
+correlations <- correlations %>% 
+  mutate(label = ifelse(`p.value` > 0.01, c(paste("R==", round(correlation_coefficient, 2), "~';'~italic(P)~ `=", f_num(`p.value`,2), "`")), `p.value`))%>% 
+  mutate(label = ifelse(`p.value` < 0.01, c(paste("R==", round(correlation_coefficient, 2), "~';'~italic(P)~ `=", f_num(`p.value`,3), "`")), label)) %>%
+  mutate(label = ifelse(`p.value` < 0.001, c(paste("R==", round(correlation_coefficient, 2), "~';'~italic(P)~ `=", "<.001", "`")),label)) %>% 
+  mutate(y = ifelse(`variable` == "Creatinine, \n mg/dL", 1.2, 135))%>% 
+  mutate(x = ifelse(`feature` == "CAR 9:0", 1, 7))
+
+D1 <- ggscatter(df, x= "value.x", y="value.y", add = "reg.line", size = 0.1, add.params = list(size = 0.1))+
+  facet_grid(variable~feature, scales = "free") +  
+  geom_text(
+    data    = correlations,
+    mapping = aes(x = x, y = y, label = label),
+    parse=TRUE, size=2)+ 
+  mytheme + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+ggexport(D1,filename = "./Figures for publication/Figure 4C.tiff",
+         width = 1200, # 7 inch max width 2100
+         height = 1200, 
+         res = 300) 
+#----------------------------------------------------------------------------combine all together ---------------------------------------------------------------------------------
+filler <- ggplot()
+library(gridExtra)
+library(ggplot2)
+
+A <- ggarrange(bp1, bp2, bp3, ncol = 3, common.legend = TRUE, legend = "top")
+
+p <- arrangeGrob(
+  A, 
+  arrangeGrob(C, C1, ncol = 2), 
+  arrangeGrob(B, D1, ncol = 2),
+  ncol = 1
+)
+as_ggplot(p)
+
+# Add labels to the arranged plots
+p <- as_ggplot(p) +    
+  draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 16,
+                  x = c(0, 0, 0.5, 0 ,0.5), 
+                  y = c(1, 0.66, 0.66,0.33, 0.33)) # transform to a ggplot
+
+
+
+p
+ggexport(p,filename = "Figure 4_NEW_HANA.tiff",
+         width = 1800, # 7 inch max width 2100
+         height = 1700, 
+         res = 300) # Figure panels should be prepared at a minimum resolution of 300 dpi and saved at a maximum width of 180 mm (7,08661 inch).  
+
+
+#----------------------------------------------------------------------------Corr with lab tests DRUG--------------------------------------------------------------------
+features <- c("octadecenoylcarnitine_C18_1_Car","octadecadienylcarnitine_C18_2_Car","Palmitoylcarnitine")
+df <- melt %>% filter(feature %in% features) %>% select ("newID", "Timepoint","feature","value","label2") %>% 
+  left_join(labtest_melt %>% filter(variable %in% c("CREA_mg_dL","GFR_mL_min")) %>% 
+              select ("newID", "Timepoint","variable","value"),by=c("newID", "Timepoint"))
+
+
+df$variable <- factor(df$variable, levels = c("GFR_mL_min", "CREA_mg_dL"), 
+                      labels = c("Glomerular Filtration \n Rate, mL/min","Creatinine, \n mg/dL"))
+df$feature <- factor(df$feature, levels =  c("octadecenoylcarnitine_C18_1_Car","octadecadienylcarnitine_C18_2_Car","Palmitoylcarnitine"),
+                     labels = c("CAR 18:1","CAR 18:2", "CAR 16:0")
+)
+
+
+correlations <- data.frame()
+for(i in unique(df$feature)){
+  for(j in unique(df$variable)){
+    tmp <- df[df$feature == i & df$variable == j,]
+    cor.test.result <- cor.test(tmp$value.x, tmp$value.y, method = "pearson")
+    tmp2 <- data.frame(feature = i, variable = j, correlation_coefficient = cor.test.result$estimate, p.value = cor.test.result$p.value)
+    correlations <- rbind(correlations, tmp2)
+  }
+}
+
+correlations <- correlations %>% 
+  mutate(label = ifelse(`p.value` > 0.01, c(paste("R==", round(correlation_coefficient, 2), "~';'~italic(P)~ `=", f_num(`p.value`,2), "`")), `p.value`))%>% 
+  mutate(label = ifelse(`p.value` < 0.01, c(paste("R==", round(correlation_coefficient, 2), "~';'~italic(P)~ `=", f_num(`p.value`,3), "`")), label)) %>%
+  mutate(label = ifelse(`p.value` < 0.001, c(paste("R==", round(correlation_coefficient, 2), "~';'~italic(P)~ `=", "<.001", "`")),label)) %>% 
+  mutate(y = ifelse(`variable` == "Creatinine, \n mg/dL", 1.2, 135))%>% 
+  mutate(x = ifelse(`feature` == "CAR 18:2", 3, 8))
+
+S2 <- ggscatter(df, x= "value.x", y="value.y", add = "reg.line", size = 0.1, add.params = list(size = 0.1))+
+  facet_grid(variable~feature, scales = "free") +  
+  geom_text(
+    data    = correlations,
+    mapping = aes(x = x, y = y, label = label),
+    parse=TRUE, size=2)+ 
+  mytheme + theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+
+ggexport(S2,filename = "./Figures for publication/Figure S2.tiff",
+         width = 1300, # 7 inch max width 2100
+         height = 1000, 
+         res = 300) # Figure panels should be prepared at a minimum resolution of 300 dpi and saved at a maximum width of 180 mm (7,08661 inch).  
+
+#=============================================================================C2/(C16+C18:1)============================================================================
+
+t_raw <- t(raw_data)
+colnames(t_raw) <- t_raw[1,]
+t_raw <- t_raw[-1,]
+
+t_raw <- as.data.frame(t_raw) %>% mutate_all(as.numeric)
+t_raw$ratio <- t_raw$acetylcarnitine/(t_raw$Palmitoylcarnitine + t_raw$octadecenoylcarnitine_C18_1_Car)
+t_raw$`Sample ID` <- rownames(t_raw)
+
+t_raw <- merge(t_raw, meta, by = "Sample ID")
+
+stat_comp <- data.frame()
+  for(i in 1:length(my_comparisons5)){
+    group1 <- my_comparisons5[[i]][1]
+    group2 <- my_comparisons5[[i]][2]
+    a <- t_raw[t_raw$label2==my_comparisons5[[i]][1],]$ratio
+    b <- t_raw[t_raw$label2==my_comparisons5[[i]][2],]$ratio
+    
+    
+    if (length(a)==length(b)){
+      test <- t.test(a, b, paired=T)
+      
+      
+    } else{
+      test <- t.test(a, b, paired=F)
+    }
+    p.value <- test$p.value
+    est <- test$estimate[1]
+    est_CI <- paste(round(test$conf.int[1],2), "to", 
+                    round(test$conf.int[2],2), sep=" ")
+    mean1 <- mean(a, na.rm = T)
+    sd1 <- sd(a, na.rm = T)
+    
+    mean2 <- mean(b, na.rm = T)
+    sd2 <- sd(b, na.rm = T)
+    y.position <- rstatix::get_y_position(t_raw[t_raw$label2 %in% c(my_comparisons5[[i]][1],my_comparisons5[[i]][2]) ,],ratio ~ label2,   fun = "max")$y.position*1.05
+    
+    tmp <- cbind(variable = j, group1,group2,N1 = length(a),mean1,sd1,N2 = length(b),mean2,sd2,p.value, est, est_CI,  y.position)
+    stat_comp <- rbind(stat_comp,tmp)
+    
+  }
+
+ggboxplot(t_raw, x = "label2", y = "ratio", color = "label2", 
+          palette = palette, add = "jitter", ylab = "Glomerular Filtration Rate, mL/min", size = 0.1, add.params = list(size = 0.1))
+
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 60, ymax = 150, 
+           alpha = 0.2,fill = "#ccffd4")+
+  geom_signif(data=stat_comp %>% filter(variable=="GFR_mL_min"), 
+              aes(xmin=group1, xmax=group2, annotations=p_new, y_position=y.position),
+              textsize = 6/.pt, 
+              manual=TRUE, parse=T, size=0.3)+
+  mytheme + theme(axis.title.x = element_blank())
